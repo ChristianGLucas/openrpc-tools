@@ -1,0 +1,52 @@
+name: christiangeorgelucas/openrpc-tools
+version: 0.1.0
+language: typescript
+nodes:
+    - name: ParseDocument
+      input: DocumentInput
+      output: ParseDocumentOutput
+    - name: ValidateDocument
+      input: DocumentInput
+      output: ValidateDocumentOutput
+    - name: ExtractInfo
+      input: DocumentInput
+      output: ExtractInfoOutput
+    - name: ListMethods
+      input: DocumentInput
+      output: ListMethodsOutput
+    - name: ExtractMethod
+      input: MethodNameInput
+      output: ExtractMethodOutput
+    - name: ExtractMethodParams
+      input: MethodNameInput
+      output: ExtractMethodParamsOutput
+    - name: ExtractMethodResult
+      input: MethodNameInput
+      output: ExtractMethodResultOutput
+    - name: ExtractErrors
+      input: ExtractErrorsInput
+      output: ExtractErrorsOutput
+    - name: ListServers
+      input: DocumentInput
+      output: ListServersOutput
+    - name: ExtractComponents
+      input: DocumentInput
+      output: ExtractComponentsOutput
+    - name: ExtractSchema
+      input: ExtractSchemaInput
+      output: ExtractSchemaOutput
+    - name: ExtractRefs
+      input: DocumentInput
+      output: ExtractRefsOutput
+    - name: DereferenceDocument
+      input: DereferenceInput
+      output: DereferenceOutput
+    - name: GroupMethodsByTag
+      input: DocumentInput
+      output: GroupMethodsByTagOutput
+    - name: DetectParamStructure
+      input: MethodNameInput
+      output: DetectParamStructureOutput
+    - name: CountSummary
+      input: DocumentInput
+      output: CountSummaryOutput

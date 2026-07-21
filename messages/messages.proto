@@ -1,0 +1,392 @@
+// This file defines the data contracts (messages) for your Axiom package.
+// Every node's --input and --output refers to a message defined here.
+//
+// Run `axiom create message <Name>` to scaffold a new message below.
+// Run `axiom generate` to compile these definitions into language bindings in gen/.
+//
+// DOCUMENTATION
+//   Comments written directly above a message or field declaration are extracted
+//   automatically at publish time and shown in the Axiom registry as documentation.
+//   Write your descriptions there — no separate doc files needed.
+//
+//   Leading comment  (no blank line before the declaration) → registry description ✓
+//   Detached comment (blank line before the declaration)    → ignored by registry  ✗
+//
+// This file is yours to edit. Axiom only appends new message blocks — it never
+// overwrites or removes content you have written.
+
+syntax = "proto3";
+
+package christiangeorgelucas.openrpc_tools;
+
+// Canonical input for every node that reads an OpenRPC document: the raw
+// document, always supplied as JSON text by the caller. No node ever
+// fetches a document, resolves a remote reference, uses the wall clock, or
+// relies on randomness — every node is a pure, deterministic
+// single-input -> single-output transform over this text.
+message DocumentInput {
+  // The OpenRPC document as JSON text (per the OpenRPC 1.x specification:
+  // https://spec.open-rpc.org). Bounded in size; oversized input returns a
+  // structured error rather than being parsed.
+  string document = 1;
+}
+
+// A single structural or semantic problem found while parsing or
+// validating a document — never a crash or an opaque exception.
+message DocError {
+  // Human-readable description of the problem.
+  string message = 1;
+  // JSON-Pointer-style location within the document (RFC 6901), e.g.
+  // "/methods/0/params". Empty when the location is the document root or
+  // unknown (e.g. the input was not valid JSON at all).
+  string path = 2;
+}
+
+// Result of a lightweight structural parse: is this JSON text shaped like
+// an OpenRPC document (an "openrpc" version string, an "info" object, and
+// a "methods" array), plus top-level counts. Does not check every method/
+// schema against the full OpenRPC meta-schema — use ValidateDocument for
+// full spec conformance.
+message ParseDocumentOutput {
+  // True if the input parsed as JSON and has the minimum OpenRPC shape.
+  bool valid = 1;
+  // The declared "openrpc" spec version string (e.g. "1.2.6"). Empty if absent.
+  string openrpc_version = 2;
+  int32 method_count = 3;
+  int32 schema_count = 4;
+  int32 server_count = 5;
+  // Set when valid is false: either a JSON parse failure, an oversized
+  // document, or a missing/malformed required top-level field.
+  DocError error = 6;
+}
+
+// One violation of the official OpenRPC JSON Schema meta-schema.
+message ValidationViolation {
+  string message = 1;
+  // JSON Pointer to the offending location in the document instance.
+  string instance_path = 2;
+  // JSON Pointer to the meta-schema keyword that rejected it, e.g.
+  // "/properties/methods/items/required".
+  string keyword_path = 3;
+}
+
+// Result of validating a document against the official OpenRPC meta-schema
+// (https://github.com/open-rpc/meta-schema) using Ajv, a JSON Schema
+// validator. Offline and deterministic: no network I/O is ever performed.
+message ValidateDocumentOutput {
+  bool valid = 1;
+  // Every meta-schema violation found; empty when valid is true.
+  repeated ValidationViolation violations = 2;
+  // Set only when the input could not even be parsed as JSON, or exceeded
+  // the size limit; valid is always false in that case and violations is empty.
+  string parse_error = 3;
+}
+
+// The OpenRPC "info.contact" object.
+message ContactInfo {
+  string name = 1;
+  string url = 2;
+  string email = 3;
+}
+
+// The OpenRPC "info.license" object.
+message LicenseInfo {
+  string name = 1;
+  string url = 2;
+}
+
+// The OpenRPC document's "info" block.
+message InfoBlock {
+  string title = 1;
+  string version = 2;
+  string description = 3;
+  string terms_of_service = 4;
+  ContactInfo contact = 5;
+  LicenseInfo license = 6;
+}
+
+// Result of extracting the "info" block from a document.
+message ExtractInfoOutput {
+  // False when the document has no "info" object at all, or is not valid JSON.
+  bool found = 1;
+  InfoBlock info = 2;
+  string error = 3;
+}
+
+// A single OpenRPC "Content Descriptor Object" — describes one parameter,
+// one method result, or one error's "data" field.
+message ContentDescriptor {
+  // Empty for a result/error-data descriptor when the source object had no name.
+  string name = 1;
+  string summary = 2;
+  string description = 3;
+  bool required = 4;
+  bool deprecated = 5;
+  // The descriptor's "schema", re-serialized as compact JSON text — the
+  // schema is itself an arbitrary JSON Schema object, so it is passed
+  // through as text rather than modeled field-by-field. Empty when the
+  // schema itself is a bare {"$ref": ...} pointer; see ref_target instead.
+  string schema_json = 6;
+  // Set when the descriptor's "schema" is itself a bare {"$ref": "..."}
+  // object; schema_json is empty in that case. Never fetched or resolved
+  // here — use ExtractRefs / DereferenceDocument for that.
+  string ref_target = 7;
+}
+
+// Summary of one method, without its full parameter/result/error detail
+// (see ExtractMethod for that). Used by ListMethods.
+message MethodSummary {
+  string name = 1;
+  string summary = 2;
+  string description = 3;
+  repeated string param_names = 4;
+  // The method's "result" content descriptor's name; empty if the method
+  // declares no result (a notification-only method) or the result is a
+  // bare $ref with no name.
+  string result_name = 5;
+  repeated string tags = 6;
+  bool deprecated = 7;
+}
+
+// Result of listing every method declared in the document.
+message ListMethodsOutput {
+  repeated MethodSummary methods = 1;
+  string error = 2;
+}
+
+// One OpenRPC "Error Object": a declared JSON-RPC error a method (or the
+// whole API) can return.
+message ErrorObject {
+  int32 code = 1;
+  string message = 2;
+  // The error's "data" schema, re-serialized as compact JSON text; empty
+  // if the error declares no "data".
+  string data_schema_json = 3;
+  // Set when the error itself is a bare {"$ref": "..."} object (referring
+  // to a components/errors entry) rather than an inline Error Object;
+  // code/message/data_schema_json are empty in that case.
+  string ref_target = 4;
+  // The key this error is registered under in components.errors; empty
+  // for a method's own inline/ref'd error entries.
+  string component_name = 5;
+}
+
+// One method's declared errors, keyed by method name.
+message MethodErrors {
+  string method_name = 1;
+  repeated ErrorObject errors = 2;
+}
+
+// Input for ExtractErrors: an optional method-name filter.
+message ExtractErrorsInput {
+  string document = 1;
+  // When set, method_errors contains only this method (found=false in the
+  // reply if it doesn't exist or declares no errors). Empty means: every
+  // method that declares at least one error.
+  string method_name = 2;
+}
+
+// Result of extracting declared errors: the document's reusable
+// "components.errors" (global_errors) plus each method's own inline/ref'd
+// "errors" array (method_errors).
+message ExtractErrorsOutput {
+  repeated ErrorObject global_errors = 1;
+  repeated MethodErrors method_errors = 2;
+  string error = 3;
+}
+
+// One OpenRPC "Server Variable Object".
+message ServerVariable {
+  string name = 1;
+  string default_value = 2;
+  repeated string enum_values = 3;
+  string description = 4;
+}
+
+// One OpenRPC "Server Object".
+message ServerInfo {
+  string name = 1;
+  string url = 2;
+  string summary = 3;
+  string description = 4;
+  repeated ServerVariable variables = 5;
+}
+
+// Result of listing the document's top-level "servers" array.
+message ListServersOutput {
+  repeated ServerInfo servers = 1;
+  string error = 2;
+}
+
+// Result of extracting the "components" section's reusable-object names —
+// content descriptors and schemas foremost, plus the other reusable
+// categories the OpenRPC spec defines (errors, examples, links,
+// example pairings, tags), each just the map's key names. Use ExtractSchema
+// for one schema's full body.
+message ExtractComponentsOutput {
+  repeated string schema_names = 1;
+  repeated string content_descriptor_names = 2;
+  repeated string error_names = 3;
+  repeated string example_names = 4;
+  repeated string example_pairing_names = 5;
+  repeated string link_names = 6;
+  repeated string tag_names = 7;
+  string error = 8;
+}
+
+// Input for ExtractSchema: the reusable schema's key under components.schemas.
+message ExtractSchemaInput {
+  string document = 1;
+  string schema_name = 2;
+}
+
+// Result of extracting one named schema from components.schemas.
+message ExtractSchemaOutput {
+  bool found = 1;
+  // The schema, re-serialized as compact JSON text.
+  string schema_json = 2;
+  string error = 3;
+}
+
+// One "$ref" found anywhere in the document. Reported, never fetched —
+// no node in this package performs network or filesystem I/O.
+message RefEntry {
+  // JSON Pointer to the object containing the "$ref" keyword, e.g.
+  // "/methods/0/params/0/schema".
+  string path = 1;
+  // The literal $ref string value, e.g. "#/components/schemas/Foo" or
+  // "https://example.com/schema.json#/Bar".
+  string target = 2;
+  // True for an internal same-document pointer ("#/...").
+  bool is_internal = 3;
+  // True for anything else: an absolute/relative URL or a bare file path.
+  // Such refs are always left untouched and reported here — never fetched.
+  bool is_remote = 4;
+}
+
+// Result of finding every "$ref" in the document.
+message ExtractRefsOutput {
+  repeated RefEntry refs = 1;
+  string error = 2;
+}
+
+// Input for DereferenceDocument.
+message DereferenceInput {
+  string document = 1;
+  // Upper bound on $ref resolution depth (a ref that points to an object
+  // that itself contains a ref, etc.). 0 or unset uses a safe default.
+  // Exceeding it is reported the same way a circular ref is: the $ref is
+  // left in place, unresolved, and reported back.
+  int32 max_depth = 2;
+}
+
+// Result of inlining every internal ("#/...") $ref in the document.
+// Remote refs (URL or filesystem) are always left untouched, never
+// fetched, and reported in unresolved_remote_refs. A $ref cycle is
+// detected (not infinitely followed) and reported in circular_refs, with
+// the cyclic $ref left in place rather than inlined.
+message DereferenceOutput {
+  // The document, re-serialized as JSON text, with every resolvable
+  // internal $ref replaced by the object it points to.
+  string document_json = 1;
+  repeated string unresolved_remote_refs = 2;
+  repeated string circular_refs = 3;
+  string error = 4;
+}
+
+// One tag's group of method names (from the top-level "tags" array plus
+// the "tags" each method declares).
+message TagGroup {
+  string tag_name = 1;
+  repeated string method_names = 2;
+}
+
+// Result of grouping every method by the tags it declares.
+message GroupMethodsByTagOutput {
+  repeated TagGroup groups = 1;
+  // Methods that declare no tags at all.
+  repeated string untagged_methods = 2;
+  string error = 3;
+}
+
+// Input for a single-method lookup, shared by ExtractMethod,
+// ExtractMethodParams, ExtractMethodResult, and DetectParamStructure.
+message MethodNameInput {
+  string document = 1;
+  string method_name = 2;
+}
+
+// One named example pairing on a method: a params/result example pair.
+message MethodExample {
+  string name = 1;
+  string description = 2;
+  // The example's "params" array, re-serialized as compact JSON text.
+  string params_json = 3;
+  // The example's "result" value, re-serialized as compact JSON text.
+  string result_json = 4;
+}
+
+// Full detail for one method: params, result, declared errors, tags, and
+// examples. See MethodSummary for the lighter-weight ListMethods shape.
+message MethodDetail {
+  string name = 1;
+  string summary = 2;
+  string description = 3;
+  repeated ContentDescriptor params = 4;
+  ContentDescriptor result = 5;
+  repeated ErrorObject errors = 6;
+  repeated string tags = 7;
+  bool deprecated = 8;
+  // "by-name", "by-position", or "either" (the OpenRPC default). See
+  // DetectParamStructure for a dedicated node on this one field.
+  string param_structure = 9;
+  repeated MethodExample examples = 10;
+}
+
+// Result of extracting one method by name.
+message ExtractMethodOutput {
+  bool found = 1;
+  MethodDetail method = 2;
+  string error = 3;
+}
+
+// Result of extracting one method's parameter list.
+message ExtractMethodParamsOutput {
+  bool found = 1;
+  repeated ContentDescriptor params = 2;
+  string error = 3;
+}
+
+// Result of extracting one method's result content descriptor.
+message ExtractMethodResultOutput {
+  bool found = 1;
+  // False when the method has no "result" (a notification-only method);
+  // found is still true in that case since the method itself exists.
+  bool has_result = 2;
+  ContentDescriptor result = 3;
+  string error = 4;
+}
+
+// Result of detecting a method's declared (or defaulted) param-passing style.
+message DetectParamStructureOutput {
+  bool found = 1;
+  // "by-name", "by-position", or "either".
+  string param_structure = 2;
+  // True if the method's own "paramStructure" field was present; false if
+  // this is the OpenRPC spec's default ("either") applied in its absence.
+  bool explicit = 3;
+  string error = 4;
+}
+
+// Result of CountSummary: document-wide capability counts, useful for a
+// quick "what's in this API" overview without walking the full structure.
+message CountSummaryOutput {
+  int32 method_count = 1;
+  int32 schema_count = 2;
+  int32 server_count = 3;
+  int32 tag_count = 4;
+  int32 content_descriptor_count = 5;
+  int32 error_definition_count = 6;
+  int32 example_count = 7;
+  string error = 8;
+}
