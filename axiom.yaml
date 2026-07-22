@@ -1,52 +1,179 @@
 name: christiangeorgelucas/openrpc-tools
 version: 0.1.0
 language: typescript
+description: >-
+  Deterministic parsing, validation, and structural inspection of OpenRPC
+  documents — the JSON-RPC 2.0 API description specification, the JSON-RPC
+  counterpart to OpenAPI. Validation wraps Ajv (MIT) against the official
+  @open-rpc/meta-schema (Apache-2.0), composed with its sibling
+  @json-schema-tools/meta-schema (Apache-2.0) as the meta-schema's own
+  design requires. Every other node — listing, extraction, dereferencing —
+  treats the document as JSON and applies hand-written, spec-aware
+  structural extraction. The document is always supplied as caller text
+  (JSON — OpenRPC has no YAML variant); no node ever fetches a document or
+  resolves a remote ("$ref" to a URL or filesystem path) reference — such
+  refs are always left untouched and reported back, never fetched. Covers:
+  structural parsing and full meta-schema validation, info-block
+  extraction, method listing and single-method detail (params, result,
+  errors, examples, tags, param-passing structure), global and per-method
+  error extraction, server listing, components inspection (schemas,
+  content descriptors, errors, examples, links, tags), named-schema
+  extraction, "$ref" discovery, internal-"$ref" dereferencing with
+  cycle/depth-bound detection, tag-grouped method listing, and a
+  document-wide capability-count summary. Every node bounds input size and
+  "$ref" resolution depth up front, so a malformed or adversarial document
+  returns a structured error instead of hanging, crashing, or exhausting
+  memory.
+license: MIT
+author: Christian George Lucas
+tags:
+  - openrpc
+  - json-rpc
+  - api-spec
+  - validation
+  - dereference
 nodes:
     - name: ParseDocument
+      description: >-
+        Lightweight structural parse of an OpenRPC document: confirms the
+        JSON text parses and has the minimum OpenRPC shape (an "openrpc"
+        version string, an "info" object, and a "methods" array), and
+        reports top-level counts (methods, components.schemas, servers).
+        Does not check every method or schema against the full OpenRPC
+        meta-schema — use ValidateDocument for that. Malformed or oversized
+        input returns valid=false with a structured error instead of
+        throwing.
       input: DocumentInput
       output: ParseDocumentOutput
     - name: ValidateDocument
+      description: >-
+        Validates a document against the official OpenRPC meta-schema
+        using Ajv, a JSON Schema validator — full structural conformance,
+        not just the top-level shape ParseDocument checks. Every violation
+        is reported with its instance and schema-keyword JSON Pointers.
+        The meta-schema and its dependency are both vendored as npm
+        packages and compiled once; validation is entirely offline and
+        deterministic — no node ever fetches anything over the network.
       input: DocumentInput
       output: ValidateDocumentOutput
     - name: ExtractInfo
+      description: >-
+        Extracts the document's "info" block: title, version, description,
+        termsOfService, and the nested contact/license objects. found is
+        false when the document has no "info" object at all.
       input: DocumentInput
       output: ExtractInfoOutput
     - name: ListMethods
+      description: >-
+        Lists every method declared in the document's "methods" array, in
+        document order: name, summary, description, deprecated flag,
+        param names, the result content descriptor's name, and tag names.
+        A lightweight overview — use ExtractMethod for one method's full
+        detail.
       input: DocumentInput
       output: ListMethodsOutput
     - name: ExtractMethod
+      description: >-
+        Extracts one method's full detail by its declared "name": params
+        (each with its schema or "$ref" target), result, declared errors,
+        tags, deprecated flag, param-passing structure, and any named
+        examples. found is false when no method with that name exists.
       input: MethodNameInput
       output: ExtractMethodOutput
     - name: ExtractMethodParams
+      description: >-
+        Extracts one method's parameter list by method name: each param's
+        name, schema (or "$ref" target), required/deprecated flags, and
+        summary/description. found is false when no method with that name
+        exists.
       input: MethodNameInput
       output: ExtractMethodParamsOutput
     - name: ExtractMethodResult
+      description: >-
+        Extracts one method's "result" content descriptor by method name.
+        found is false when no method with that name exists; has_result is
+        false (found still true) for a notification-only method that
+        declares no "result" at all — a valid, spec-legal OpenRPC shape.
       input: MethodNameInput
       output: ExtractMethodResultOutput
     - name: ExtractErrors
+      description: >-
+        Extracts declared JSON-RPC errors: the document's reusable
+        "components.errors" (global_errors, always returned in full) plus
+        each method's own inline/referenced "errors" array. Set
+        method_name to restrict method_errors to one method; leave it
+        empty to get every method that declares at least one error.
       input: ExtractErrorsInput
       output: ExtractErrorsOutput
     - name: ListServers
+      description: >-
+        Lists the document's top-level "servers" array: each server's url,
+        name, summary, description, and declared variables. Returns an
+        empty list — not an error — for a document that declares no
+        servers, which is spec-legal.
       input: DocumentInput
       output: ListServersOutput
     - name: ExtractComponents
+      description: >-
+        Lists the key names in every "components" category: schemas and
+        contentDescriptors (the two most commonly reused), plus errors,
+        examples, examplePairings, links, and tags. Use ExtractSchema to
+        get one named schema's full body.
       input: DocumentInput
       output: ExtractComponentsOutput
     - name: ExtractSchema
+      description: >-
+        Extracts one named schema from components.schemas, re-serialized
+        as compact JSON text. found is false when no schema is registered
+        under that name.
       input: ExtractSchemaInput
       output: ExtractSchemaOutput
     - name: ExtractRefs
+      description: >-
+        Finds every "$ref" anywhere in the document and reports its
+        JSON-Pointer location and literal target string. Every ref is only
+        ever reported, never fetched: is_internal is true for a
+        same-document pointer ("#/..."), is_remote is true for anything
+        else. Use DereferenceDocument to actually inline the internal
+        ones.
       input: DocumentInput
       output: ExtractRefsOutput
     - name: DereferenceDocument
+      description: >-
+        Inlines every internal ("#/...") $ref in the document, recursively.
+        A remote ref is NEVER fetched — always left untouched and reported
+        in unresolved_remote_refs. A $ref cycle, or a resolution chain
+        longer than max_depth (clamped into [1, 200]; 0/unset defaults to
+        50), is detected and left in place rather than followed forever,
+        reported in circular_refs.
       input: DereferenceInput
       output: DereferenceOutput
     - name: GroupMethodsByTag
+      description: >-
+        Groups every method by the tags it declares (OpenRPC has no
+        top-level "tags" array the way OpenAPI does — tags only exist
+        inline per-method and, reusably, under components.tags). A $ref'd
+        tag resolves one hop, internally only, so a tag referenced from a
+        method and the same tag registered in components.tags report the
+        identical name. Methods with no tags are listed separately in
+        untagged_methods.
       input: DocumentInput
       output: GroupMethodsByTagOutput
     - name: DetectParamStructure
+      description: >-
+        Detects one method's declared (or spec-defaulted) param-passing
+        style — "by-name", "by-position", or "either" — by method name.
+        explicit is true when the method's own "paramStructure" field was
+        present; false when the OpenRPC spec's default ("either") is being
+        reported instead.
       input: MethodNameInput
       output: DetectParamStructureOutput
     - name: CountSummary
+      description: >-
+        Document-wide capability counts for a quick "what's in this API"
+        overview: method/server counts from their top-level arrays; a
+        distinct tag count (the union of every method's inline tags and
+        components.tags' registered names); and schema/content-descriptor/
+        error-definition/example counts from their components.* registries.
       input: DocumentInput
       output: CountSummaryOutput
