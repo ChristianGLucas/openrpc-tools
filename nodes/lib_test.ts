@@ -3,13 +3,13 @@
 // trigger, but that stand between this package and a crash/hang on
 // adversarial input. See the node-level tests for the ordinary behavior.
 
-import { parseDocumentText, OpenRPCError, MAX_INPUT_BYTES, MAX_INPUT_DEPTH } from './lib';
+import { parseDocumentText, OpenRPCError, MAX_INPUT_DEPTH } from './lib';
 
 describe('lib safety bounds', () => {
-  it('rejects a document over the byte-size limit before parsing it', () => {
-    const huge = JSON.stringify({ openrpc: '1.2.6', info: { title: 't', version: '1' }, methods: [], padding: 'x'.repeat(MAX_INPUT_BYTES + 1) });
-    expect(() => parseDocumentText(huge)).toThrow(OpenRPCError);
-    expect(() => parseDocumentText(huge)).toThrow(/exceeding/);
+  it('handles a large (multi-MB) well-formed document without crashing', () => {
+    const huge = JSON.stringify({ openrpc: '1.2.6', info: { title: 't', version: '1' }, methods: [], padding: 'x'.repeat(3 * 1024 * 1024 + 1) });
+    const doc = parseDocumentText(huge);
+    expect(doc.openrpc).toBe('1.2.6');
   });
 
   it('rejects pathologically deep nesting instead of crashing (native JSON.parse RangeError caught, or our own depth check)', () => {

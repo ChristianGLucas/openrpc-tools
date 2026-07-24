@@ -36,19 +36,18 @@ const openrpcMetaSchemaRaw: any = require('@open-rpc/meta-schema').openrpcDocume
  * unhandled exception. */
 export class OpenRPCError extends Error {}
 
-// Stays comfortably under Axiom's ~4 MiB node gRPC transport cap.
-export const MAX_INPUT_BYTES = 3 * 1024 * 1024;
-// Guards our own recursive/iterative tree-walking against a pathologically
-// deep document driving a native stack overflow (JSON.parse itself can
-// throw a RangeError on extreme nesting — caught below — but we also bound
-// the parsed structure explicitly as defense in depth).
+// Guards our own recursive/iterative tree-walking — and third-party
+// recursive-descent code we hand the parsed structure to, e.g. Ajv's schema
+// validator in ValidateDocument — against a pathologically deep document
+// driving a native stack overflow (JSON.parse itself can throw a RangeError
+// on extreme nesting — caught below — but we also bound the parsed
+// structure explicitly as defense in depth). This is a stack-safety bound,
+// not a payload-size one, so it stays even though the platform now owns
+// input/output size limits.
 export const MAX_INPUT_DEPTH = 300;
+// dereferenceDocument's `build()` below is genuine JS-call-stack recursion;
+// this is its stack-overflow guard.
 export const MAX_SERIALIZE_DEPTH = 1000;
-// Bounds total nodes visited while walking/serializing a (possibly
-// dereferenced) structure, closing "$ref fan-out" amplification (A refs B
-// twice, B refs C twice, ...) before it can blow up combinatorially.
-export const MAX_SERIALIZE_NODES = 200_000;
-export const MAX_EXPANDED_BYTES = 24 * 1024 * 1024;
 
 // DereferenceDocument's $ref-chain depth bound: a caller-supplied max_depth
 // is clamped into [1, DEREF_MAX_DEPTH_CEILING]; 0/unset uses the default.
@@ -60,7 +59,6 @@ export const DEREF_MAX_DEPTH_CEILING = 200;
  * could itself stack-overflow on the very input it's meant to reject. */
 function checkDepth(root: any): void {
   const stack: Array<{ node: any; depth: number }> = [{ node: root, depth: 0 }];
-  let budget = MAX_SERIALIZE_NODES;
   while (stack.length > 0) {
     const top = stack.pop()!;
     if (top.depth > MAX_INPUT_DEPTH) {
@@ -68,10 +66,6 @@ function checkDepth(root: any): void {
     }
     const node = top.node;
     if (node && typeof node === 'object') {
-      budget -= 1;
-      if (budget <= 0) {
-        throw new OpenRPCError(`document exceeds the maximum supported node count (${MAX_SERIALIZE_NODES})`);
-      }
       const keys = Array.isArray(node) ? node.map((_: any, i: number) => i) : Object.keys(node);
       for (const key of keys) {
         stack.push({ node: (node as any)[key], depth: top.depth + 1 });
@@ -88,10 +82,6 @@ function checkDepth(root: any): void {
 export function parseDocumentText(content: string): any {
   if (typeof content !== 'string' || content.length === 0) {
     throw new OpenRPCError('document is empty');
-  }
-  const byteLength = Buffer.byteLength(content, 'utf8');
-  if (byteLength > MAX_INPUT_BYTES) {
-    throw new OpenRPCError(`document is ${byteLength} bytes, exceeding the ${MAX_INPUT_BYTES}-byte limit`);
   }
 
   let doc: any;
@@ -112,16 +102,11 @@ export function parseDocumentText(content: string): any {
   return doc;
 }
 
-/** Serializes `value` to compact JSON, bounded the same as raw input.
- * JSON.parse output can never contain a real object cycle (only a
- * subsequently-dereferenced structure can — see safeStringifyDereferenced
- * for that case), so this is a plain bounded stringify. */
+/** Serializes `value` to compact JSON. JSON.parse output can never contain a
+ * real object cycle (only a subsequently-dereferenced structure can), so
+ * this is a plain stringify. */
 export function boundedStringify(value: any): string {
-  const json = JSON.stringify(value === undefined ? null : value);
-  if (Buffer.byteLength(json, 'utf8') > MAX_EXPANDED_BYTES) {
-    throw new OpenRPCError('value exceeds the maximum supported serialized size');
-  }
-  return json;
+  return JSON.stringify(value === undefined ? null : value);
 }
 
 /** True for any $ref target that is NOT a same-document JSON pointer
@@ -141,20 +126,14 @@ export interface RawRefEntry {
  * stack) collects every `$ref` string found anywhere in `root`, in a
  * stable breadth-first document order, with a JSON-Pointer path to each
  * occurrence. Parsed JSON can never contain a real cycle, so no
- * visited-set is needed for correctness — only a node budget, guarding a
- * very wide (not deep) document. */
+ * visited-set is needed for correctness. */
 export function collectRefs(root: any): RawRefEntry[] {
   const out: RawRefEntry[] = [];
-  let budget = MAX_SERIALIZE_NODES;
   const queue: Array<{ node: any; path: string }> = [{ node: root, path: '' }];
   let qi = 0;
   while (qi < queue.length) {
     const { node, path } = queue[qi++];
     if (!node || typeof node !== 'object') continue;
-    budget -= 1;
-    if (budget <= 0) {
-      throw new OpenRPCError(`document exceeds the maximum supported node count (${MAX_SERIALIZE_NODES})`);
-    }
     if (!Array.isArray(node) && typeof (node as any).$ref === 'string') {
       out.push({ path: path || '#', target: (node as any).$ref });
     }
@@ -375,17 +354,12 @@ export function dereferenceDocument(doc: any, maxDepthInput: number): Dereferenc
   const maxDepth = resolveMaxDepth(maxDepthInput);
   const unresolvedRemote = new Set<string>();
   const circular = new Set<string>();
-  let budget = MAX_SERIALIZE_NODES;
 
   function build(node: any, chain: Set<string>, structDepth: number): any {
     if (structDepth > MAX_SERIALIZE_DEPTH) {
       throw new OpenRPCError(`dereferenced document nesting exceeds the maximum supported depth (${MAX_SERIALIZE_DEPTH})`);
     }
     if (node === null || typeof node !== 'object') return node;
-    budget -= 1;
-    if (budget <= 0) {
-      throw new OpenRPCError(`dereferenced document exceeds the maximum supported node count (${MAX_SERIALIZE_NODES})`);
-    }
     if (!Array.isArray(node) && typeof node.$ref === 'string') {
       const ref = node.$ref;
       if (isExternalRef(ref)) {
